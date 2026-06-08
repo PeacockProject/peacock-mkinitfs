@@ -173,12 +173,12 @@ loop_attach_labeled() {
       echo "loop_attach $loopdev off=$off failed" >> "$logf"
       continue
     fi
-    raw_magic="$($BB dd if="$backing" bs=1 skip=$((off + 1080)) count=2 2>/tmp/prp-dd.raw.err | $BB hexdump -v -e '1/1 \"%02x\"' 2>/dev/null || true)"
-    derr="$($BB cat /tmp/prp-dd.raw.err 2>/dev/null || true)"
+    raw_magic="$($BB dd if="$backing" bs=1 skip=$((off + 1080)) count=2 2>/tmp/peacock-dd.raw.err | $BB hexdump -v -e '1/1 \"%02x\"' 2>/dev/null || true)"
+    derr="$($BB cat /tmp/peacock-dd.raw.err 2>/dev/null || true)"
     echo "loop_attach backing_probe off=$off raw_magic=${raw_magic:-none} raw_err=${derr:-none}" >> "$logf"
     blk="$($BB blkid "$loopdev" 2>/dev/null || true)"
-    magic="$($BB dd if="$loopdev" bs=1 skip=1080 count=2 2>/tmp/prp-dd.loop.err | $BB hexdump -v -e '1/1 \"%02x\"' 2>/dev/null || true)"
-    derr="$($BB cat /tmp/prp-dd.loop.err 2>/dev/null || true)"
+    magic="$($BB dd if="$loopdev" bs=1 skip=1080 count=2 2>/tmp/peacock-dd.loop.err | $BB hexdump -v -e '1/1 \"%02x\"' 2>/dev/null || true)"
+    derr="$($BB cat /tmp/peacock-dd.loop.err 2>/dev/null || true)"
     echo "loop_attach $loopdev off=$off blkid=${blk:-none} sb_magic=${magic:-none} loop_err=${derr:-none}" >> "$logf"
     $BB losetup -a >>"$logf" 2>&1 || true
     log_loop_state "$loopdev" "loop_attach_state" "$logf"
@@ -249,7 +249,7 @@ mount_subparts() {
   local boot_sb_magic=""
   local root_sb_magic=""
   local losetup_has_sizelimit=0
-  local logf="/tmp/prp-subparts.log"
+  local logf="/tmp/peacock-subparts.log"
   local boot_loop=""
   local root_loop=""
   local boot_src=""
@@ -336,7 +336,7 @@ mount_subparts() {
   done
   echo "fdisk_cmd=${fdisk_cmd:-none}" >> "$logf"
   if [ -n "$fdisk_cmd" ]; then
-    fdisk_line="$(LD_LIBRARY_PATH=/sbin:/lib:/usr/lib "$fdisk_cmd" -l "$userdata_dev" 2>/tmp/prp-fdisk.err | $BB awk -v d="$userdata_dev" '$1==d"p1"{print $2" "$4; exit}' || true)"
+    fdisk_line="$(LD_LIBRARY_PATH=/sbin:/lib:/usr/lib "$fdisk_cmd" -l "$userdata_dev" 2>/tmp/peacock-fdisk.err | $BB awk -v d="$userdata_dev" '$1==d"p1"{print $2" "$4; exit}' || true)"
     set -- $fdisk_line
     case "${1:-}:${2:-}" in
       [0-9]*:[0-9]*)
@@ -344,7 +344,7 @@ mount_subparts() {
         fdisk_boot_sectors="$2"
         ;;
     esac
-    fdisk_line="$(LD_LIBRARY_PATH=/sbin:/lib:/usr/lib "$fdisk_cmd" -l "$userdata_dev" 2>/tmp/prp-fdisk.err | $BB awk -v d="$userdata_dev" '$1==d"p2"{print $2" "$4; exit}' || true)"
+    fdisk_line="$(LD_LIBRARY_PATH=/sbin:/lib:/usr/lib "$fdisk_cmd" -l "$userdata_dev" 2>/tmp/peacock-fdisk.err | $BB awk -v d="$userdata_dev" '$1==d"p2"{print $2" "$4; exit}' || true)"
     set -- $fdisk_line
     case "${1:-}:${2:-}" in
       [0-9]*:[0-9]*)

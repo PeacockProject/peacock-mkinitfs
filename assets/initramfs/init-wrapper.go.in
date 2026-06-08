@@ -1,0 +1,60 @@
+// peacock initramfs /init wrapper source.
+//
+// This file is a Go program that mkinitfs.buildInitWrapper writes to a
+// temp file and cross-compiles to a static binary placed at /init in the
+// initramfs cpio. The binary mounts devtmpfs and exec()s the shell init
+// script (/init.sh) — it exists so kernels without BINFMT_SCRIPT (no
+// shebang interpreter) still have something to PID 1.
+//
+// No template substitutions are applied to this file; it is copied
+// verbatim to the cross-compile temp dir and built once per device arch
+// (armv7h -> arm/v7, aarch64 -> arm64, x86_64 -> amd64). The .go.in
+// extension keeps the parent peacock Go module from picking it up as
+// build-time source.
+//
+// Source of truth: peacock-ports/base/peacock-initramfs-tools (installs
+// to /usr/lib/peacock/init-wrapper.go.in). The in-tree copy at
+// Peacock/assets/initramfs/init-wrapper.go.in is the fallback consumed
+// by mkinitfs when the port has not yet been built.
+
+package main
+
+import (
+	"os"
+	"syscall"
+	"unsafe"
+)
+
+func klog(msg string) {
+	if msg == "" {
+		return
+	}
+	if f, err := os.OpenFile("/dev/kmsg", os.O_WRONLY, 0); err == nil {
+		_, _ = f.Write([]byte(msg))
+		_ = f.Close()
+		return
+	}
+	b := []byte(msg)
+	// SYSLOG_ACTION_WRITE = 2
+	_, _, _ = syscall.Syscall(syscall.SYS_SYSLOG, 2, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+}
+
+func main() {
+	_ = os.MkdirAll("/dev", 0755)
+	_ = syscall.Mount("devtmpfs", "/dev", "devtmpfs", 0, "")
+	klog("PEACOCK: init wrapper start\n")
+	env := os.Environ()
+	tryExec := func(argv []string, label string) {
+		klog("PEACOCK: exec " + label + "\n")
+		_ = syscall.Exec(argv[0], argv, env)
+	}
+
+	// Prefer explicit busybox ash, then fall back to shell.
+	tryExec([]string{"/bin/busybox", "ash", "/init.sh"}, "/bin/busybox ash /init.sh")
+	tryExec([]string{"/bin/ash", "/init.sh"}, "/bin/ash /init.sh")
+	tryExec([]string{"/bin/sh", "/init.sh"}, "/bin/sh /init.sh")
+	tryExec([]string{"/bin/busybox", "sh"}, "/bin/busybox sh")
+
+	klog("PEACOCK: init wrapper exec failed\n")
+	os.Exit(1)
+}

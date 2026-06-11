@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/PeacockProject/peacock-mkinitfs/assets"
@@ -243,7 +244,47 @@ func copyFileOrSymlink(src, dst string) error {
 	return os.WriteFile(dst, content, mode)
 }
 
+// initramfsUtilLinuxTools is the whitelist of util-linux binaries the initramfs
+// actually invokes (disk/partition probing). util-linux ships ~100 tools and
+// the full bin/sbin tree blows past lk2nd's 16 MiB ramdisk cap, so we copy only
+// these (dynamic builds — the init scripts call the plain names; mount/umount/dd
+// come from busybox).
+var initramfsUtilLinuxTools = map[string]bool{
+	"losetup": true, "blkid": true, "partx": true, "lsblk": true,
+	"fdisk": true, "sfdisk": true, "blockdev": true, "findfs": true,
+	"wipefs": true, "hexdump": true, "blkdiscard": true, "partprobe": true,
+}
+
+// keepInitramfsBin keeps only whitelisted util-linux tools, dropping the rest
+// and the redundant `.static` duplicates (the scripts use the dynamic names).
+func keepInitramfsBin(rel string, info os.FileInfo) bool {
+	if info.IsDir() {
+		return true
+	}
+	base := filepath.Base(rel)
+	if strings.HasSuffix(base, ".static") {
+		return false
+	}
+	return initramfsUtilLinuxTools[base]
+}
+
+// keepInitramfsLib drops static build libraries (.a) and libtool archives (.la),
+// which are never needed at runtime, while keeping the shared libs (.so*).
+func keepInitramfsLib(rel string, info os.FileInfo) bool {
+	if info.IsDir() {
+		return true
+	}
+	return !strings.HasSuffix(rel, ".a") && !strings.HasSuffix(rel, ".la")
+}
+
 func copyTree(srcRoot, dstRoot string) error {
+	return copyTreeFiltered(srcRoot, dstRoot, nil)
+}
+
+// copyTreeFiltered copies srcRoot into dstRoot. When keep is non-nil, only
+// entries for which keep(rel, info) returns true are copied (directories are
+// still created so kept files land in the right place).
+func copyTreeFiltered(srcRoot, dstRoot string, keep func(rel string, info os.FileInfo) bool) error {
 	srcInfo, err := os.Stat(srcRoot)
 	if err != nil {
 		return err
@@ -264,6 +305,9 @@ func copyTree(srcRoot, dstRoot string) error {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		if keep != nil && !keep(rel, info) {
 			return nil
 		}
 
@@ -359,20 +403,25 @@ func Build(output string, cfg InitConfig) error {
 		type runtimeCopy struct {
 			srcRel string
 			dstRel string
+			keep   func(rel string, info os.FileInfo) bool
 		}
+		// Binary trees are whitelisted to the handful of util-linux tools the
+		// initramfs uses; lib trees drop static .a/.la build artifacts. Without
+		// this the full util-linux tree (~100 tools + static libs + .static
+		// duplicates) overflows lk2nd's 16 MiB ramdisk cap.
 		for _, item := range []runtimeCopy{
-			{srcRel: "sbin", dstRel: "sbin"},
-			{srcRel: "bin", dstRel: "bin"},
-			{srcRel: filepath.Join("usr", "bin"), dstRel: filepath.Join("usr", "bin")},
-			{srcRel: "lib", dstRel: "lib"},
-			{srcRel: filepath.Join("usr", "lib"), dstRel: filepath.Join("usr", "lib")},
+			{srcRel: "sbin", dstRel: "sbin", keep: keepInitramfsBin},
+			{srcRel: "bin", dstRel: "bin", keep: keepInitramfsBin},
+			{srcRel: filepath.Join("usr", "bin"), dstRel: filepath.Join("usr", "bin"), keep: keepInitramfsBin},
+			{srcRel: "lib", dstRel: "lib", keep: keepInitramfsLib},
+			{srcRel: filepath.Join("usr", "lib"), dstRel: filepath.Join("usr", "lib"), keep: keepInitramfsLib},
 		} {
 			srcDir := filepath.Join(runtimeRoot, item.srcRel)
 			if _, err := os.Stat(srcDir); err != nil {
 				continue
 			}
 			dstDir := filepath.Join(tmpDir, item.dstRel)
-			if err := copyTree(srcDir, dstDir); err != nil {
+			if err := copyTreeFiltered(srcDir, dstDir, item.keep); err != nil {
 				return fmt.Errorf("failed to copy runtime tree %s -> %s: %w", srcDir, dstDir, err)
 			}
 		}

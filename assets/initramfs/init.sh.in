@@ -531,9 +531,13 @@ bootlog_try_from_root "$ROOT_DEV" || true
 # This is important when flashing to larger SD cards or eMMC
 # resize2fs can resize unmounted filesystems, so we do it before mounting
 splash "Resizing root filesystem..." 4
-if [ -f /new_root/.peacock_resized ]; then
-    log "Root filesystem already resized, skipping"
-else
+# resize2fs is idempotent ("Nothing to do!" once the fs fills the device), so
+# run it unconditionally before mounting. NOTE: a prior /new_root/.peacock_resized
+# guard was checked + written BEFORE the root was mounted (i.e. onto the
+# initramfs tmpfs at /new_root), so it never persisted and never fired — resize
+# ran every boot regardless. Removed as dead/misleading code. A real
+# resize-once skip would need the marker on the MOUNTED root (online resize
+# after mount); not worth the boot-path risk for what is a cheap no-op.
 if [ -x /sbin/resize2fs ]; then
     /sbin/resize2fs "$ROOT_DEV" 2>&1 || echo "Warning: resize2fs failed (may already be correct size), continuing..."
 elif command -v resize2fs >/dev/null 2>&1; then
@@ -542,8 +546,6 @@ elif /bin/busybox resize2fs "$ROOT_DEV" 2>/dev/null; then
     echo "Resized using busybox resize2fs"
 else
     echo "Warning: resize2fs not available, filesystem may not fill partition"
-fi
-    touch /new_root/.peacock_resized 2>/dev/null || true
 fi
 
 splash "Mounting root filesystem..." 5

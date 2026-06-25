@@ -69,6 +69,7 @@ func newBuildCmd() *cobra.Command {
 		lvm2BuildDir           string
 		initramfsToolsBuildDir string
 		assetsDir              string
+		initWrapperPath        string
 		deviceName             string
 		rootLabel              string
 		initSystem             string
@@ -109,6 +110,7 @@ gracefully when absent — matching the in-tree Peacock CLI behavior.`,
 				Lvm2BuildDir:           lvm2BuildDir,
 				InitramfsToolsBuildDir: initramfsToolsBuildDir,
 				AssetsDir:              assetsDir,
+				InitWrapperPath:        initWrapperPath,
 				LogWriter:              cmd.ErrOrStderr(),
 			}
 			return mkinitfs.Build(output, cfg)
@@ -124,6 +126,7 @@ gracefully when absent — matching the in-tree Peacock CLI behavior.`,
 	cmd.Flags().StringVar(&lvm2BuildDir, "lvm2", "", "Staged lvm2 port build dir (sbin/dmsetup + libs)")
 	cmd.Flags().StringVar(&initramfsToolsBuildDir, "initramfs-tools", "", "Legacy peacock-initramfs-tools port build dir (optional)")
 	cmd.Flags().StringVar(&assetsDir, "assets-dir", "", "Override directory for init.sh.in / init-wrapper.go.in / subparts-mount.sh (optional)")
+	cmd.Flags().StringVar(&initWrapperPath, "init-wrapper", "", "Prebuilt /init wrapper binary to use instead of compiling with go (optional; arch-checked)")
 	cmd.Flags().StringVar(&deviceName, "device", "", "Device codename (e.g. oppo-a16)")
 	cmd.Flags().StringVar(&rootLabel, "root-label", "ROOT", "Filesystem label for the root partition")
 	cmd.Flags().StringVar(&initSystem, "init", "systemd", "Init system: systemd or openrc")

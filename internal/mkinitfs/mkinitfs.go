@@ -54,6 +54,12 @@ type InitConfig struct {
 	// embedded fallback. Lets out-of-tree callers override individual assets
 	// without rebuilding the binary. Optional.
 	AssetsDir string
+	// InitWrapperPath, when set, points at a PREBUILT /init wrapper binary to use
+	// verbatim instead of compiling one with `go` (on-device installs have no Go
+	// toolchain). Only used if its ELF arch matches Architecture. Falls back to
+	// the /usr/lib/peacock/init-wrapper well-known path, then go, then a shell
+	// wrapper. Optional.
+	InitWrapperPath string
 	// LogWriter receives stdout/stderr of subprocesses (go build, find, cpio,
 	// gzip). Defaults to os.Stderr when nil.
 	LogWriter io.Writer
@@ -126,7 +132,85 @@ func GenerateInitScript(path string, cfg InitConfig) error {
 	return nil
 }
 
+// initWrapperMachine maps a target arch to its ELF e_machine value, so a
+// prebuilt wrapper is only ever used when it actually matches the target.
+func initWrapperMachine(arch string) (uint16, bool) {
+	switch arch {
+	case "aarch64":
+		return 0xB7, true
+	case "armv7h", "armv7", "arm":
+		return 0x28, true
+	case "x86_64":
+		return 0x3E, true
+	}
+	return 0, false
+}
+
+// prebuiltWrapperOK reports whether path is an ELF for the given arch.
+func prebuiltWrapperOK(path, arch string) bool {
+	want, ok := initWrapperMachine(arch)
+	if !ok {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var hdr [20]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return false
+	}
+	if hdr[0] != 0x7f || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F' {
+		return false
+	}
+	got := uint16(hdr[18]) | uint16(hdr[19])<<8 // e_machine, little-endian
+	return got == want
+}
+
 func buildInitWrapper(outPath string, cfg InitConfig) error {
+	// 1. Prebuilt wrapper shipped as a feather package (e.g. peacock-init-wrapper
+	//    in PRP) — copy it verbatim, avoiding a Go toolchain on-device. Only used
+	//    when its ELF arch matches the target so a cross-build can't grab the
+	//    wrong binary.
+	candidates := []string{}
+	if cfg.InitWrapperPath != "" {
+		candidates = append(candidates, cfg.InitWrapperPath)
+	}
+	candidates = append(candidates, "/usr/lib/peacock/init-wrapper")
+	for _, p := range candidates {
+		if !prebuiltWrapperOK(p, cfg.Architecture) {
+			continue
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("failed to read prebuilt init wrapper %s: %w", p, err)
+		}
+		if err := os.WriteFile(outPath, data, 0o755); err != nil {
+			return fmt.Errorf("failed to install prebuilt init wrapper: %w", err)
+		}
+		return nil
+	}
+
+	// 2. On-device installs (PRP recovery) have no Go toolchain. When `go` is
+	// unavailable, emit a shell /init wrapper that does the same job (mount
+	// devtmpfs, then exec the shell init script). This relies on the booting
+	// kernel having CONFIG_BINFMT_SCRIPT (shebang support) — standard on
+	// Peacock device kernels. The compiled binary path stays the default for
+	// the desktop builder and kernels without BINFMT_SCRIPT.
+	if _, lookErr := exec.LookPath("go"); lookErr != nil {
+		shell := "#!/bin/busybox ash\n" +
+			"# peacock initramfs /init (shell wrapper; emitted when no Go toolchain\n" +
+			"# is present, e.g. on-device installs). Needs CONFIG_BINFMT_SCRIPT.\n" +
+			"/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null\n" +
+			"echo 'PEACOCK: init wrapper (shell) start' > /dev/kmsg 2>/dev/null\n" +
+			"exec /bin/busybox ash /init.sh\n"
+		if werr := os.WriteFile(outPath, []byte(shell), 0o755); werr != nil {
+			return fmt.Errorf("failed to write shell init wrapper: %w", werr)
+		}
+		return nil
+	}
+
 	arch := cfg.Architecture
 	goarch := ""
 	goarm := ""
